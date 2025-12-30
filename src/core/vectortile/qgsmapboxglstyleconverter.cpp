@@ -2360,10 +2360,46 @@ bool QgsMapBoxGlStyleConverter::parseSymbolLayerAsRenderer( const QVariantMap &j
         }
       }
 
+      QPointF offsetPoint{0.0f,0.0f};
+      if ( jsonLayout.contains( QStringLiteral( "icon-offset" ) ) )
+      {
+        const QVariant jsonIconOffset = jsonLayout.value( QStringLiteral( "icon-offset" ) );
+        if (jsonIconOffset.userType() == QMetaType::Type::QVariantList) {
+            if (jsonIconOffset.toList().length() != 2) {
+              context.pushWarning( QObject::tr( "%1: Bad array length for icon-offset type (%2)" ).arg( context.layerId(), jsonIconOffset.toList().length() ) );
+            } else {
+              int offsetPoint_idx = 0;
+              for (auto &v : jsonIconOffset.toList()) {
+                switch ( v.userType() )
+                {
+                  case QMetaType::Type::Int:
+                  case QMetaType::Type::LongLong:
+                  case QMetaType::Type::Double:
+                    if (offsetPoint_idx == 0) {
+                      offsetPoint.setX(v.toFloat());
+                    } else if (offsetPoint_idx == 1) {
+                      offsetPoint.setY(v.toFloat());
+                    }
+                    break;
+                  default:
+                    context.pushWarning( QObject::tr( "%1: Skipping unsupported type for icon-offset array value (%2)" ).arg( context.layerId(), QMetaType::typeName( static_cast<QMetaType::Type>( v.userType() ) ) ) );
+                    break;
+                }
+                offsetPoint_idx++;
+              }
+            }
+        } else {
+          context.pushWarning( QObject::tr( "%1: Skipping unsupported icon-offset type (%2)" ).arg( context.layerId(), QMetaType::typeName( static_cast<QMetaType::Type>( jsonIconOffset.userType() ) ) ) );
+        }
+      }
+
       rasterMarker->setDataDefinedProperties( markerDdProperties );
       rasterMarker->setAngle( rotation );
       if ( iconOpacity >= 0 )
         rasterMarker->setOpacity( iconOpacity );
+
+      rasterMarker->setOffset( offsetPoint );
+      rasterMarker->setOffsetUnit( Qgis::RenderUnit::Pixels );
 
       QgsMarkerSymbol *markerSymbol = new QgsMarkerSymbol( QgsSymbolLayerList() << rasterMarker );
       rendererStyle.setSymbol( markerSymbol );
@@ -3289,6 +3325,12 @@ QString QgsMapBoxGlStyleConverter::parseExpression( const QVariantList &expressi
            op,
            parseValue( expression.value( 2 ), context ) );
   }
+  else if ( op == QLatin1String( "*" ) && expression.size() >= 2 )
+  {
+    return QStringLiteral( "(%1 %2 %3)" ).arg( parseValue( expression.value( 1 ), context ),
+           op,
+           parseValue( expression.value( 2 ), context ) );
+  }
   else if ( op == QLatin1String( "to-number" ) )
   {
     return QStringLiteral( "to_real(%1)" ).arg( parseValue( expression.value( 1 ), context ) );
@@ -3355,6 +3397,7 @@ QString QgsMapBoxGlStyleConverter::parseExpression( const QVariantList &expressi
   }
   else if ( op == QLatin1String( "==" )
             || op == QLatin1String( "!=" )
+            || op == QLatin1String( "!==" )
             || op == QLatin1String( ">=" )
             || op == '>'
             || op == QLatin1String( "<=" )
@@ -3364,6 +3407,8 @@ QString QgsMapBoxGlStyleConverter::parseExpression( const QVariantList &expressi
     if ( op == QLatin1String( "==" ) )
       op = QStringLiteral( "IS" );
     else if ( op == QLatin1String( "!=" ) )
+      op = QStringLiteral( "IS NOT" );
+    else if ( op == QLatin1String( "!==" ) )
       op = QStringLiteral( "IS NOT" );
     return QStringLiteral( "%1 %2 %3" ).arg( parseKey( expression.value( 1 ), context ),
            op, parseValue( expression.value( 2 ), context ) );
