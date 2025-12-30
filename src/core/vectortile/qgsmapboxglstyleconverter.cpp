@@ -3293,6 +3293,10 @@ QString QgsMapBoxGlStyleConverter::parseExpression( const QVariantList &expressi
   {
     return QStringLiteral( "to_real(%1)" ).arg( parseValue( expression.value( 1 ), context ) );
   }
+  else if ( op == QLatin1String( "number-format" ) )
+  {
+    return QStringLiteral( "to_real(%1)" ).arg( parseValue( expression.value( 1 ), context ) );
+  }
   if ( op == QLatin1String( "literal" ) )
   {
     return expression.value( 1 ).toString();
@@ -3323,6 +3327,23 @@ QString QgsMapBoxGlStyleConverter::parseExpression( const QVariantList &expressi
       operatorString = QStringLiteral( ") OR (" );
 
     return QStringLiteral( "(%1)" ).arg( parts.join( operatorString ) );
+  }
+  else if ( op == QLatin1String( "!all" ))
+  {
+    QStringList parts;
+    for ( int i = 1; i < expression.size(); ++i )
+    {
+      const QString part = parseValue( expression.at( i ), context );
+      if ( part.isEmpty() )
+      {
+        context.pushWarning( QObject::tr( "%1: Skipping unsupported expression" ).arg( context.layerId() ) );
+        return QString();
+      }
+      parts << part;
+    }
+
+    QString operatorString = QStringLiteral( ") AND (" );
+    return QStringLiteral( "(NOT (%1))" ).arg( QStringLiteral( "(%1)" ).arg( parts.join( operatorString ) ) );
   }
   else if ( op == '!' )
   {
