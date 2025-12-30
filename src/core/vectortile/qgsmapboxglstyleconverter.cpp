@@ -1823,6 +1823,35 @@ void QgsMapBoxGlStyleConverter::parseSymbolLayer( const QVariantMap &jsonLayer, 
     }
   }
 
+  double textOpacity = 0.0;
+  if ( jsonPaint.contains( QStringLiteral( "text-opacity" ) ) )
+  {
+    const QVariant jsonTextOpacity = jsonPaint.value( QStringLiteral( "text-opacity" ) );
+    switch ( jsonTextOpacity.userType() )
+    {
+      case QMetaType::Type::Int:
+      case QMetaType::Type::LongLong:
+      case QMetaType::Type::Double:
+      case QMetaType::Type::Float:
+        textOpacity = jsonTextOpacity.toDouble() * 100.0;
+        ddLabelProperties.setProperty( QgsPalLayerSettings::Property::FontOpacity, textOpacity );
+        break;
+
+      case QMetaType::Type::QVariantMap:
+        ddLabelProperties.setProperty( QgsPalLayerSettings::Property::FontOpacity, parseInterpolateByZoom( jsonTextOpacity.toMap(), context, 100, &textOpacity ) );
+        break;
+
+      case QMetaType::Type::QVariantList:
+      case QMetaType::Type::QStringList:
+        ddLabelProperties.setProperty( QgsPalLayerSettings::Property::FontOpacity, parseValueList( jsonTextOpacity.toList(), PropertyType::Numeric, context, 100, 255, nullptr, &textOpacity ) );
+        break;
+
+      default:
+        context.pushWarning( QObject::tr( "%1: Skipping unsupported text-opacity type (%2)" ).arg( context.layerId(), QMetaType::typeName( static_cast<QMetaType::Type>( jsonTextOpacity.userType() ) ) ) );
+        break;
+    }
+  }
+
   if ( jsonLayout.contains( QStringLiteral( "text-justify" ) ) )
   {
     const QVariant jsonTextJustify = jsonLayout.value( QStringLiteral( "text-justify" ) );
