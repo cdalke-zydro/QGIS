@@ -1823,6 +1823,35 @@ void QgsMapBoxGlStyleConverter::parseSymbolLayer( const QVariantMap &jsonLayer, 
     }
   }
 
+  double textOpacity = 0.0;
+  if ( jsonPaint.contains( QStringLiteral( "text-opacity" ) ) )
+  {
+    const QVariant jsonTextOpacity = jsonPaint.value( QStringLiteral( "text-opacity" ) );
+    switch ( jsonTextOpacity.userType() )
+    {
+      case QMetaType::Type::Int:
+      case QMetaType::Type::LongLong:
+      case QMetaType::Type::Double:
+      case QMetaType::Type::Float:
+        textOpacity = jsonTextOpacity.toDouble() * 100.0;
+        ddLabelProperties.setProperty( QgsPalLayerSettings::Property::FontOpacity, textOpacity );
+        break;
+
+      case QMetaType::Type::QVariantMap:
+        ddLabelProperties.setProperty( QgsPalLayerSettings::Property::FontOpacity, parseInterpolateByZoom( jsonTextOpacity.toMap(), context, 100, &textOpacity ) );
+        break;
+
+      case QMetaType::Type::QVariantList:
+      case QMetaType::Type::QStringList:
+        ddLabelProperties.setProperty( QgsPalLayerSettings::Property::FontOpacity, parseValueList( jsonTextOpacity.toList(), PropertyType::Numeric, context, 100, 255, nullptr, &textOpacity ) );
+        break;
+
+      default:
+        context.pushWarning( QObject::tr( "%1: Skipping unsupported text-opacity type (%2)" ).arg( context.layerId(), QMetaType::typeName( static_cast<QMetaType::Type>( jsonTextOpacity.userType() ) ) ) );
+        break;
+    }
+  }
+
   if ( jsonLayout.contains( QStringLiteral( "text-justify" ) ) )
   {
     const QVariant jsonTextJustify = jsonLayout.value( QStringLiteral( "text-justify" ) );
@@ -2360,10 +2389,46 @@ bool QgsMapBoxGlStyleConverter::parseSymbolLayerAsRenderer( const QVariantMap &j
         }
       }
 
+      QPointF offsetPoint{0.0f,0.0f};
+      if ( jsonLayout.contains( QStringLiteral( "icon-offset" ) ) )
+      {
+        const QVariant jsonIconOffset = jsonLayout.value( QStringLiteral( "icon-offset" ) );
+        if (jsonIconOffset.userType() == QMetaType::Type::QVariantList) {
+            if (jsonIconOffset.toList().length() != 2) {
+              context.pushWarning( QObject::tr( "%1: Bad array length for icon-offset type (%2)" ).arg( context.layerId(), jsonIconOffset.toList().length() ) );
+            } else {
+              int offsetPoint_idx = 0;
+              for (auto &v : jsonIconOffset.toList()) {
+                switch ( v.userType() )
+                {
+                  case QMetaType::Type::Int:
+                  case QMetaType::Type::LongLong:
+                  case QMetaType::Type::Double:
+                    if (offsetPoint_idx == 0) {
+                      offsetPoint.setX(v.toFloat());
+                    } else if (offsetPoint_idx == 1) {
+                      offsetPoint.setY(v.toFloat());
+                    }
+                    break;
+                  default:
+                    context.pushWarning( QObject::tr( "%1: Skipping unsupported type for icon-offset array value (%2)" ).arg( context.layerId(), QMetaType::typeName( static_cast<QMetaType::Type>( v.userType() ) ) ) );
+                    break;
+                }
+                offsetPoint_idx++;
+              }
+            }
+        } else {
+          context.pushWarning( QObject::tr( "%1: Skipping unsupported icon-offset type (%2)" ).arg( context.layerId(), QMetaType::typeName( static_cast<QMetaType::Type>( jsonIconOffset.userType() ) ) ) );
+        }
+      }
+
       rasterMarker->setDataDefinedProperties( markerDdProperties );
       rasterMarker->setAngle( rotation );
       if ( iconOpacity >= 0 )
         rasterMarker->setOpacity( iconOpacity );
+
+      rasterMarker->setOffset( offsetPoint );
+      rasterMarker->setOffsetUnit( Qgis::RenderUnit::Pixels );
 
       QgsMarkerSymbol *markerSymbol = new QgsMarkerSymbol( QgsSymbolLayerList() << rasterMarker );
       rendererStyle.setSymbol( markerSymbol );
@@ -3289,7 +3354,17 @@ QString QgsMapBoxGlStyleConverter::parseExpression( const QVariantList &expressi
            op,
            parseValue( expression.value( 2 ), context ) );
   }
+  else if ( op == QLatin1String( "*" ) && expression.size() >= 2 )
+  {
+    return QStringLiteral( "(%1 %2 %3)" ).arg( parseValue( expression.value( 1 ), context ),
+           op,
+           parseValue( expression.value( 2 ), context ) );
+  }
   else if ( op == QLatin1String( "to-number" ) )
+  {
+    return QStringLiteral( "to_real(%1)" ).arg( parseValue( expression.value( 1 ), context ) );
+  }
+  else if ( op == QLatin1String( "number-format" ) )
   {
     return QStringLiteral( "to_real(%1)" ).arg( parseValue( expression.value( 1 ), context ) );
   }
@@ -3324,6 +3399,23 @@ QString QgsMapBoxGlStyleConverter::parseExpression( const QVariantList &expressi
 
     return QStringLiteral( "(%1)" ).arg( parts.join( operatorString ) );
   }
+  else if ( op == QLatin1String( "!all" ))
+  {
+    QStringList parts;
+    for ( int i = 1; i < expression.size(); ++i )
+    {
+      const QString part = parseValue( expression.at( i ), context );
+      if ( part.isEmpty() )
+      {
+        context.pushWarning( QObject::tr( "%1: Skipping unsupported expression" ).arg( context.layerId() ) );
+        return QString();
+      }
+      parts << part;
+    }
+
+    QString operatorString = QStringLiteral( ") AND (" );
+    return QStringLiteral( "(NOT (%1))" ).arg( QStringLiteral( "(%1)" ).arg( parts.join( operatorString ) ) );
+  }
   else if ( op == '!' )
   {
     // ! inverts next expression's meaning
@@ -3334,6 +3426,7 @@ QString QgsMapBoxGlStyleConverter::parseExpression( const QVariantList &expressi
   }
   else if ( op == QLatin1String( "==" )
             || op == QLatin1String( "!=" )
+            || op == QLatin1String( "!==" )
             || op == QLatin1String( ">=" )
             || op == '>'
             || op == QLatin1String( "<=" )
@@ -3343,6 +3436,8 @@ QString QgsMapBoxGlStyleConverter::parseExpression( const QVariantList &expressi
     if ( op == QLatin1String( "==" ) )
       op = QStringLiteral( "IS" );
     else if ( op == QLatin1String( "!=" ) )
+      op = QStringLiteral( "IS NOT" );
+    else if ( op == QLatin1String( "!==" ) )
       op = QStringLiteral( "IS NOT" );
     return QStringLiteral( "%1 %2 %3" ).arg( parseKey( expression.value( 1 ), context ),
            op, parseValue( expression.value( 2 ), context ) );
